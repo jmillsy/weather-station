@@ -7,13 +7,11 @@
 #include <WiFiUdp.h>
 #include <Wire.h>
 #include <PubSubClient.h>
-#include <ESPAsyncWebServer.h>
 #include <NTPClient.h>
 #include <ArduinoJson.h>
 #include "time.h"
 #include "config.h"
 
-AsyncWebServer server(80);
 Adafruit_MAX17048 maxlipo;
 LTR390 ltr390(LTR390_I2C_ADDRESS);
 
@@ -24,12 +22,9 @@ long lastMessage = 0;
 
 // Declare the custom functions
 void setup_wifi();
+void setup_sensors();
 void publishHomeAssistantConfigMessage();
 void reconnect();
-void handleDiscoveryOn(AsyncWebServerRequest *request);
-void handleDiscoveryOff(AsyncWebServerRequest *request);
-void handleDeviceInfo(AsyncWebServerRequest *request);
-void mqtt_setup();
 void mqtt_connect();
 void publishGenericMessage(const char *topic, const char *payload);
 
@@ -92,7 +87,7 @@ void setup()
   // setCpuFrequencyMhz(80);
 
   Serial.begin(115200);
-  delay(2000);
+  delay(500);
 
   // Initialize with log level and log output.
   Log.begin(LOG_LEVEL_VERBOSE, &Serial);
@@ -104,15 +99,20 @@ void setup()
   // Setup Wifi & MQTT
   setup_wifi();
 
-  server.on("/discovery_on", HTTP_GET, handleDiscoveryOn);
-  server.on("/discovery_off", HTTP_GET, handleDiscoveryOff);
-  server.on("/device_info", HTTP_GET, handleDeviceInfo);
-
-  server.begin();
-
-  mqtt_setup();
-
   // Sensor Setup
+  setup_sensors();
+}
+
+void setup_sensors()
+{
+  if (!ltr390.init())
+  {
+    Serial.println("LTR390 not connected!");
+  }
+
+  ltr390.setMode(LTR390_MODE_UVS);
+  ltr390.setGain(LTR390_GAIN_18);
+  ltr390.setResolution(LTR390_RESOLUTION_20BIT);
 
   while (!maxlipo.begin())
   {
@@ -122,19 +122,6 @@ void setup()
   Serial.print(F("Found MAX17048"));
   Serial.print(F(" with Chip ID: 0x"));
   Serial.println(maxlipo.getChipID(), HEX);
-
-  delay(2000); // Pause for 2 seconds
-
-  if (!ltr390.init())
-  {
-    Serial.println("LTR390 not connected!");
-  }
-
-  ltr390.setMode(LTR390_MODE_UVS);
-  
-
-  ltr390.setGain(LTR390_GAIN_18);
-  ltr390.setResolution(LTR390_RESOLUTION_20BIT);
 }
 
 void setup_wifi()
@@ -172,6 +159,16 @@ void setup_wifi()
 
   // When setup wifi ok turn on led board
   digitalWrite(ONBOARD_LED, HIGH);
+
+  // Configure mqtt
+  client.setBufferSize(512);
+
+  timeClient.begin();
+  timeClient.setTimeOffset(0);
+
+  clientId += String(random(0xffff), HEX);
+
+  publishHomeAssistantConfigMessage();
 }
 
 void loop()
@@ -190,15 +187,14 @@ void loop()
 
     Serial.println(fullOutput);
 
-    float wfac = 1.0;   // wfac
-    float gain = 18.0;   // gain
-    
-    Serial.println(ltr390.readUVS());
-    
+    float wfac = 1.0;  // wfac
+    float gain = 18.0; // gain
 
-    //float uvindex = ( (( ltr390.readUVS() * wfac) / 2300) * 4 * ( 18 / gain ));
+    Serial.println(ltr390.readUVS());
+
+    // float uvindex = ( (( ltr390.readUVS() * wfac) / 2300) * 4 * ( 18 / gain ));
     float uvindex = round(ltr390.readUVS() / 2300.0 * 100.0) / 100.0;
-    
+
     Serial.println(uvindex);
 
     StaticJsonDocument<512> state_info;
@@ -226,105 +222,27 @@ void mqtt_connect()
   client.loop();
 }
 
-void mqtt_setup()
-{
+// void handleDiscoveryOn(AsyncWebServerRequest *request)
+// {
+//   publishHomeAssistantConfigMessage();
+//   DISCOVERY_ENABLED = true;
+//   request->send(200, "text/plain", "Discovery turned on");
+// }
 
-  client.setBufferSize(512);
+// void handleDiscoveryOff(AsyncWebServerRequest *request)
+// {
 
-  timeClient.begin();
-  timeClient.setTimeOffset(0);
+//   DISCOVERY_ENABLED = false;
 
-  clientId += String(random(0xffff), HEX);
-}
+//   // Send blank message to the discovery topic to remove it
+//   const int TOPICS_SIZE = sizeof(TOPICS) / sizeof(TOPICS[0]);
+//   for (int index = 0; index < TOPICS_SIZE; index++)
+//   {
+//     publishGenericMessage(TOPICS[index]->discovery_topic.c_str(), "");
+//   }
 
-void handleDeviceInfo(AsyncWebServerRequest *request)
-{
-
-  String deviceInfo = "";
-
-  deviceInfo += "ESP32 Chip ------------------- \n";
-  deviceInfo += "ESP32 Chip model: ";
-  deviceInfo += ESP.getChipModel();
-  deviceInfo += " Rev ";
-  deviceInfo += ESP.getChipRevision();
-  deviceInfo += "\n";
-
-  deviceInfo += "This chip has ";
-  deviceInfo += ESP.getChipCores();
-  deviceInfo += " cores\n";
-
-  deviceInfo += "Flash Size ";
-  deviceInfo += ESP.getFlashChipSize();
-  deviceInfo += "\n";
-  deviceInfo += "Flash Speed ";
-  deviceInfo += ESP.getFlashChipSpeed();
-  deviceInfo += "\n";
-  deviceInfo += "Flash Mode ";
-  deviceInfo += ESP.getFlashChipMode();
-  deviceInfo += "\n";
-
-  deviceInfo += "Free Heap ";
-  deviceInfo += ESP.getFreeHeap();
-  deviceInfo += "\n";
-  deviceInfo += "Free PSRAM ";
-  deviceInfo += ESP.getFreePsram();
-  deviceInfo += "\n";
-  deviceInfo += "Free Sketch Space ";
-  deviceInfo += ESP.getFreeSketchSpace();
-  deviceInfo += "\n";
-
-  deviceInfo += "\nWiFi ------------------- \n";
-  deviceInfo += "IP Address: ";
-  deviceInfo += WiFi.localIP().toString();
-  deviceInfo += "\n";
-
-  deviceInfo += "Mac Address: ";
-  deviceInfo += WiFi.macAddress();
-  deviceInfo += "\n";
-
-  deviceInfo += "Hostname: ";
-  deviceInfo += WiFi.getHostname();
-  deviceInfo += "\n";
-
-  deviceInfo += "Gateway: ";
-  deviceInfo += WiFi.gatewayIP().toString();
-  deviceInfo += "\n";
-
-  deviceInfo += "\nMQTT ------------------- \n";
-  deviceInfo += "MQTT Server: ";
-  deviceInfo += mqtt_server;
-
-  bool success = Ping.ping(mqtt_server, 3);
-  success ? deviceInfo += " (Connected)" : deviceInfo += " (Disconnected)";
-  deviceInfo += "\n";
-
-  deviceInfo += "Discovery Enabled = " + String(DISCOVERY_ENABLED ? "true" : "false");
-  deviceInfo += "\n";
-
-  request->send(200, "text/plain", deviceInfo);
-}
-
-void handleDiscoveryOn(AsyncWebServerRequest *request)
-{
-  publishHomeAssistantConfigMessage();
-  DISCOVERY_ENABLED = true;
-  request->send(200, "text/plain", "Discovery turned on");
-}
-
-void handleDiscoveryOff(AsyncWebServerRequest *request)
-{
-
-  DISCOVERY_ENABLED = false;
-
-  // Send blank message to the discovery topic to remove it
-  const int TOPICS_SIZE = sizeof(TOPICS) / sizeof(TOPICS[0]);
-  for (int index = 0; index < TOPICS_SIZE; index++)
-  {
-    publishGenericMessage(TOPICS[index]->discovery_topic.c_str(), "");
-  }
-
-  request->send(200, "text/plain", "Discovery turned off");
-}
+//   request->send(200, "text/plain", "Discovery turned off");
+// }
 
 void publishGenericMessage(const char *topic, const char *payload)
 {
