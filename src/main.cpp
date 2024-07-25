@@ -11,6 +11,33 @@
 #include <ArduinoJson.h>
 #include "time.h"
 #include "config.h"
+#include <Adafruit_NeoPixel.h>
+
+Adafruit_NeoPixel pixels(1, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
+
+enum
+{
+  WHITE,
+  RED,
+  GREEN,
+  BLUE,
+  YELLOW,
+  CYAN,
+  MAGENTA,
+  OFF
+};
+
+uint32_t LED_Colors[8] = {
+    // Red, Green, Blue
+    0xFFFFFF, // White
+    0xFF0000, // Red
+    0x00FF00, // Green
+    0x0000FF, // Blue
+    0xFFC000, // Yellow
+    0x00B0FF, // Cyan
+    0xD000B0, // Magenta
+    0x000000, // Off | Black
+};
 
 Adafruit_MAX17048 maxlipo;
 LTR390 ltr390(LTR390_I2C_ADDRESS);
@@ -21,6 +48,7 @@ long interval = 1000 * 30;
 long lastMessage = 0;
 
 // Declare the custom functions
+void pushSensorDataToMQTT();
 void setup_wifi();
 void setup_sensors();
 void publishHomeAssistantConfigMessage();
@@ -28,15 +56,9 @@ void reconnect();
 void mqtt_connect();
 void publishGenericMessage(const char *topic, const char *payload);
 
-// Setting for NTP Time
-const char *ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = 3600;
-const int daylightOffset_sec = 3600;
-
 // Init WiFi/WiFiUDP, NTP and MQTT Client
 WiFiUDP ntpUDP;
 WiFiClient espClient;
-NTPClient timeClient(ntpUDP);
 PubSubClient client(mqtt_server, mqtt_port, espClient);
 
 // Prefix for the MQTT Client Identification
@@ -83,11 +105,25 @@ const int TOPICS_SIZE = sizeof(TOPICS) / sizeof(TOPICS[0]);
 void setup()
 {
 
+#if defined(NEOPIXEL_POWER)
+  // If this board has a power control pin, we must set it to output and high
+  // in order to enable the NeoPixels. We put this in an #if defined so it can
+  // be reused for other boards without compilation errors
+  pinMode(NEOPIXEL_POWER, OUTPUT);
+  digitalWrite(NEOPIXEL_POWER, HIGH);
+#endif
+
+  pixels.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
+  pixels.setBrightness(20); // not so bright
+  pixels.fill(LED_Colors[WHITE]);
+
   // Might be a good thing to explore for battery life
   // setCpuFrequencyMhz(80);
 
   Serial.begin(115200);
-  delay(500);
+  // delay(500);
+
+  Serial.println("In setup() ");
 
   // Initialize with log level and log output.
   Log.begin(LOG_LEVEL_VERBOSE, &Serial);
@@ -96,29 +132,37 @@ void setup()
   Log.notice(F("ESP32 Chip model %s Rev %d" CR), ESP.getChipModel(), ESP.getChipRevision());
   Log.notice(F("This chip has %d cores" CR), ESP.getChipCores());
 
+
   // Setup Wifi & MQTT
   setup_wifi();
 
   // Sensor Setup
   setup_sensors();
+
+
+  // if (now - lastMessage > interval)
+  // {
+  //   lastMessage = now;
+
+  //   // esp_sleep_enable_timer_wakeup(30 * uS_TO_S_FACTOR); // sleep 30 seconds
+  //   // esp_deep_sleep_start();
+  //   //   esp_light_sleep_start
+  // }
 }
 
 void setup_sensors()
 {
-  if (!ltr390.init())
-  {
-    Serial.println("LTR390 not connected!");
-  }
-
+  ltr390.init();
   ltr390.setMode(LTR390_MODE_UVS);
   ltr390.setGain(LTR390_GAIN_18);
   ltr390.setResolution(LTR390_RESOLUTION_20BIT);
 
-  while (!maxlipo.begin())
-  {
-    Serial.println(F("Couldnt find Adafruit MAX17048?\nMake sure a battery is plugged in!"));
-    delay(2000);
-  }
+  // while (!maxlipo.begin())
+  // {
+  //   Serial.println(F("Couldnt find Adafruit MAX17048?\nMake sure a battery is plugged in!"));
+  //   delay(2000);
+  // }
+  maxlipo.begin();
   Serial.print(F("Found MAX17048"));
   Serial.print(F(" with Chip ID: 0x"));
   Serial.println(maxlipo.getChipID(), HEX);
@@ -163,53 +207,57 @@ void setup_wifi()
   // Configure mqtt
   client.setBufferSize(512);
 
-  timeClient.begin();
-  timeClient.setTimeOffset(0);
-
   clientId += String(random(0xffff), HEX);
 
   publishHomeAssistantConfigMessage();
+
+  
+}
+
+void pushSensorDataToMQTT()
+{
+  // float uvindex = ( (( ltr390.readUVS() * wfac) / 2300) * 4 * ( 18 / gain ));
+  float uvindex = round(ltr390.readUVS() / 2300.0 * 100.0) / 100.0;
+
+  Serial.println(uvindex);
+
+  StaticJsonDocument<512> state_info;
+  state_info[UV_INDEX_TOPIC.json_key_name] = uvindex;
+  state_info[UV_BATTERY_TOPIC.json_key_name] = maxlipo.cellPercent();
+  state_info[UV_BATTERY_VOLT_TOPIC.json_key_name] = maxlipo.cellVoltage();
+
+  char stateInfoAsJson[512];
+  serializeJson(state_info, stateInfoAsJson);
+
+  // todo condense into a single topic
+  publishGenericMessage(UV_INDEX_TOPIC.state_topic.c_str(), stateInfoAsJson);
+  publishGenericMessage(UV_BATTERY_TOPIC.state_topic.c_str(), stateInfoAsJson);
+  publishGenericMessage(UV_BATTERY_VOLT_TOPIC.state_topic.c_str(), stateInfoAsJson);
 }
 
 void loop()
 {
 
-  long now = millis();
+  Serial.println("Start of loop");
 
-  mqtt_connect();
+  
+  // long now = millis();
 
-  if (now - lastMessage > interval)
-  {
-    lastMessage = now;
+  pushSensorDataToMQTT();
+  delay(30000);
+  // esp_sleep_enable_timer_wakeup(10 * uS_TO_S_FACTOR); // sleep X secs
+  // esp_deep_sleep_start();
+  //esp_light_sleep_start();
 
-    char fullOutput[100];
-    sprintf(fullOutput, "V: %.3f \nPercent: %.1f %%\nUV Index: %.1f\n\n", maxlipo.cellVoltage(), maxlipo.cellPercent(), ltr390.getUVI());
+  // client.disconnect();
+  // WiFi.disconnect(true);
+  // WiFi.mode(WIFI_OFF);
 
-    Serial.println(fullOutput);
+  Serial.println("end loop");
 
-    float wfac = 1.0;  // wfac
-    float gain = 18.0; // gain
+  // delay(1000);
 
-    Serial.println(ltr390.readUVS());
-
-    // float uvindex = ( (( ltr390.readUVS() * wfac) / 2300) * 4 * ( 18 / gain ));
-    float uvindex = round(ltr390.readUVS() / 2300.0 * 100.0) / 100.0;
-
-    Serial.println(uvindex);
-
-    StaticJsonDocument<512> state_info;
-    state_info[UV_INDEX_TOPIC.json_key_name] = uvindex;
-    state_info[UV_BATTERY_TOPIC.json_key_name] = maxlipo.cellPercent();
-    state_info[UV_BATTERY_VOLT_TOPIC.json_key_name] = maxlipo.cellVoltage();
-
-    char stateInfoAsJson[512];
-    serializeJson(state_info, stateInfoAsJson);
-
-    // todo condense into a single topic
-    publishGenericMessage(UV_INDEX_TOPIC.state_topic.c_str(), stateInfoAsJson);
-    publishGenericMessage(UV_BATTERY_TOPIC.state_topic.c_str(), stateInfoAsJson);
-    publishGenericMessage(UV_BATTERY_VOLT_TOPIC.state_topic.c_str(), stateInfoAsJson);
-  }
+  
 }
 
 void mqtt_connect()

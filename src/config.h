@@ -4,6 +4,7 @@
 #define ONBOARD_LED 2
 #define LTR390_I2C_ADDRESS 0x53
 
+#define uS_TO_S_FACTOR 1000000  /* Conversion factor for micro seconds to seconds */
 
 #define ST(A) #A
 #define STR(A) ST(A)
