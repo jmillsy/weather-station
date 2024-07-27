@@ -6,6 +6,8 @@
 
 #define uS_TO_S_FACTOR 1000000  /* Conversion factor for micro seconds to seconds */
 
+#define SECONDS_TO_SLEEP 15      /* Time ESP32 will go to sleep (in seconds) */
+
 #define ST(A) #A
 #define STR(A) ST(A)
 
