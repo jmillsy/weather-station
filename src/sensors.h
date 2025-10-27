@@ -1,0 +1,12 @@
+#ifndef SENSORS_H
+#define SENSORS_H
+
+#include <tuple>
+
+// Function declarations
+void setup_sensors();
+std::tuple<float, float> get_bme680_data();
+float get_uv_index();
+void i2c_scan();
+
+#endif // SENSORS_H
