@@ -107,6 +107,7 @@ void setup()
   float temp, humidity;
   std::tie(temp, humidity) = get_bme680_data();
 
+  publishHomeAssistantConfigMessage();
   pushSensorDataToMQTT(temp, humidity, get_uv_index(), true);
 
   // Check for sleep pause request

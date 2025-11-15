@@ -49,11 +49,7 @@ void setup_wifi()
     Log.notice(F("Ping to MQTT server at %s OK" CR), mqtt_server);
   }
 
-  // We only need to publish config once. But bootCount is not always entirely reliable, so we will publish while bootCount is less than 10
-  if (bootCount <= 10)
-  {
-    publishHomeAssistantConfigMessage();
-  }
+  
 }
 
 bool is_wifi_connected()

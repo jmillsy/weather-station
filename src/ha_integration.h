@@ -8,6 +8,7 @@ struct TopicInfo
 {
   const String discovery_topic;
   const String state_topic;
+  const String value_template;
   const String name;
   const String unit;
   const String json_key_name;
@@ -17,6 +18,7 @@ struct TopicInfo
 extern const TopicInfo UV_INDEX_TOPIC;
 extern const TopicInfo TEMPERATURE_TOPIC;
 extern const TopicInfo HUMIDITY_TOPIC;
+extern const TopicInfo BATTERY_VOLTAGE_TOPIC;
 extern const TopicInfo *TOPICS[];
 
 // Firmware version
